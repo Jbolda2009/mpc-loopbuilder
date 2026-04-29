@@ -35,6 +35,8 @@ export default function Home() {
   const [swingControl, setSwingControl] = useState(18);
   const [energy, setEnergy] = useState("medium");
   const [lastSamples, setLastSamples] = useState(null);
+  const [uploadingAudio, setUploadingAudio] = useState(false);
+  const [uploadedAudioName, setUploadedAudioName] = useState("");
 
   async function generateLoop() {
     setLoading(true);
@@ -53,6 +55,43 @@ export default function Home() {
     if (data.bars) setBarsControl(Number(data.bars));
 
     setLoading(false);
+  }
+
+  async function analyzeUploadedBeat(file) {
+    if (!file) return;
+
+    try {
+      setUploadingAudio(true);
+      setUploadedAudioName(file.name);
+
+      const formData = new FormData();
+      formData.append("audio", file);
+
+      const res = await fetch("/api/analyze-audio", {
+        method: "POST",
+        body: formData
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        alert("AI audio analysis failed: " + JSON.stringify(data));
+        setUploadingAudio(false);
+        return;
+      }
+
+      setResult(data);
+
+      if (data.bpm) setBpm(Number(data.bpm));
+      if (data.bars) setBarsControl(Number(data.bars));
+      if (data.promptSuggestion) setPrompt(data.promptSuggestion);
+
+      setLastSamples(null);
+      setUploadingAudio(false);
+    } catch (err) {
+      alert("Upload error: " + err.message);
+      setUploadingAudio(false);
+    }
   }
 
   function regenerate() {
@@ -294,9 +333,21 @@ export default function Home() {
         Play AI Loop
       </button>
 
-      <button onClick={() => downloadWav("full")} style={{ padding: 12 }}>
+      <button onClick={() => downloadWav("full")} style={{ padding: 12, marginRight: 10 }}>
         Download Full Mix
       </button>
+
+      <label style={{ display: "inline-block", padding: 12, background: "#eee", color: "#111", marginTop: 10 }}>
+        {uploadingAudio ? "Analyzing Beat..." : "Upload Beat for AI Idea"}
+        <input
+          type="file"
+          accept="audio/*"
+          style={{ display: "none" }}
+          onChange={(e) => analyzeUploadedBeat(e.target.files?.[0])}
+        />
+      </label>
+
+      {uploadedAudioName && <p>Uploaded: {uploadedAudioName}</p>}
 
       <h3>BPM: {bpm}</h3>
       <input type="range" min="60" max="180" value={bpm} onChange={(e) => setBpm(Number(e.target.value))} style={{ width: "100%" }} />
@@ -327,4 +378,4 @@ export default function Home() {
       )}
     </div>
   );
-}
+        }
