@@ -9,16 +9,17 @@ export default function Home() {
     const res = await fetch("/api/generate", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt })
     });
 
     const data = await res.json();
-
     setResult(data);
 
-    if (data.bpm) setBpm(data.bpm);
+    if (data.bpm) {
+      setBpm(Number(data.bpm));
+    }
   }
 
   return (
@@ -27,43 +28,34 @@ export default function Home() {
 
       <input
         type="text"
-        placeholder="Type what you want (e.g. dark trap guitar 140 bpm)"
+        placeholder="dark trap guitar 140 bpm F minor"
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         style={{ width: "100%", padding: 10 }}
       />
 
-      <br /><br />
+      <br />
+      <br />
 
-      <button onClick={generateLoop}>
-        Generate Loop
-      </button>
+      <button onClick={generateLoop}>Generate Loop</button>
 
-      <br /><br />
+      <br />
+      <br />
 
       <p>BPM: {bpm}</p>
-
-      {result && (
-        <pre>{JSON.stringify(result, null, 2)}</pre>
-      )}
-    </div>
-  );
-}      <p>BPM: {bpm}</p>
 
       <input
         type="range"
         min="60"
         max="160"
         value={bpm}
-        onChange={(e) => setBpm(e.target.value)}
+        onChange={(e) => setBpm(Number(e.target.value))}
         style={{ width: "100%" }}
       />
 
-      <br /><br />
-
-      <button onClick={playLoop}>
-        Play Loop
-      </button>
+      {result && (
+        <pre>{JSON.stringify(result, null, 2)}</pre>
+      )}
     </div>
   );
 }
