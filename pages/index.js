@@ -89,4 +89,4 @@ function playAILoop() {
     osc.connect(gain);
     gain.connect(audioCtx.destination);
     osc.start(time);
-    osc.stop(time + 0
+    osc.stop(time + 0.04);
