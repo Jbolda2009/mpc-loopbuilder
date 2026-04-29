@@ -10,27 +10,20 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        temperature: 0.7,
+        response_format: { type: "json_object" },
         messages: [
           {
             role: "system",
-            content:
-              "You are a music loop generator. Always respond ONLY with valid JSON."
+            content: "You are an expert music producer and loop designer. Return only valid JSON for an MPC-ready loop."
           },
           {
             role: "user",
-            content: `Convert this into loop settings:
+            content: `Create an MPC-ready loop plan from this request: ${prompt}
 
-${prompt}
+Return JSON with:
+bpm, key, scale, genre, instrument, mood, bars, drumPattern, bassPattern, melodyPattern, chordProgression, bounce, soundNotes.
 
-Return ONLY JSON in this format:
-{
-  "bpm": 140,
-  "key": "F",
-  "scale": "minor",
-  "style": "trap",
-  "instrument": "guitar"
-}`
+Use modern producer language. Keep bars either 4 or 8 unless user asks otherwise.`
           }
         ]
       })
@@ -38,32 +31,13 @@ Return ONLY JSON in this format:
 
     const data = await response.json();
 
-    // 🔥 Log full response for debugging
-    console.log("OPENAI RESPONSE:", JSON.stringify(data, null, 2));
-
-    const text = data.choices?.[0]?.message?.content;
-
-    if (!text) {
-      return res.status(500).json({
-        error: "No response from AI",
-        full: data
-      });
+    if (!response.ok) {
+      return res.status(500).json({ error: "OpenAI error", full: data });
     }
 
-    let parsed;
-
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = { raw: text };
-    }
-
-    return res.status(200).json(parsed);
-
+    const text = data.choices?.[0]?.message?.content || "{}";
+    return res.status(200).json(JSON.parse(text));
   } catch (err) {
-    return res.status(500).json({
-      error: "Server crash",
-      details: err.message
-    });
+    return res.status(500).json({ error: "Server crash", details: err.message });
   }
 }
