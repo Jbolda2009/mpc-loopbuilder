@@ -31,12 +31,10 @@ export default function Home() {
   const [result, setResult] = useState(null);
   const [bpm, setBpm] = useState(83);
   const [loading, setLoading] = useState(false);
-
   const [barsControl, setBarsControl] = useState(4);
   const [swingControl, setSwingControl] = useState(18);
   const [energy, setEnergy] = useState("medium");
   const [lastSamples, setLastSamples] = useState(null);
-  const [regenerationSeed, setRegenerationSeed] = useState(1);
 
   async function generateLoop() {
     setLoading(true);
@@ -59,7 +57,6 @@ export default function Home() {
 
   function regenerate() {
     setLastSamples(null);
-    setRegenerationSeed((prev) => prev + 1);
   }
 
   function pick(arr) {
@@ -83,7 +80,7 @@ export default function Home() {
     return await ctx.decodeAudioData(arr);
   }
 
-  async function buildLoop(ctx, exportMode = false) {
+  async function buildLoop(ctx, exportMode = false, stem = "full") {
     const selected = lastSamples || {
       kick: pick(SAMPLE_LIBRARY.kicks),
       snare: pick(SAMPLE_LIBRARY.snares),
@@ -102,18 +99,18 @@ export default function Home() {
 
     const bpmVal = Number(result?.bpm || bpm || 140);
     const bars = Number(barsControl || result?.bars || 4);
-    const stepsPerBar = 16;
-    const totalSteps = bars * stepsPerBar;
-    const secondsPerBeat = 60 / bpmVal;
-    const stepTime = secondsPerBeat / 4;
+    const totalSteps = bars * 16;
+    const stepTime = (60 / bpmVal) / 4;
     const start = exportMode ? 0 : ctx.currentTime + 0.1;
     const swingAmount = Number(swingControl) / 100;
-
     const pattern = getPattern();
     const key = result?.key || "C";
     const base808Rate = get808PlaybackRate(key);
-
     const energyBoost = energy === "high" ? 1.15 : energy === "low" ? 0.82 : 1;
+
+    function shouldPlay(type) {
+      return stem === "full" || stem === type;
+    }
 
     function play(buffer, time, volume = 1, rate = 1) {
       const src = ctx.createBufferSource();
@@ -134,62 +131,59 @@ export default function Home() {
       const bar = Math.floor(i / 16);
       const lastBar = bar === bars - 1;
 
-      // Human timing
       if (i % 2 === 1) t += stepTime * swingAmount;
       if ([5, 13].includes(pos)) t += stepTime * 0.025;
 
-      // Bar variation
       let kickPattern = [...pattern.kick];
       let bassPattern = [...pattern.bass808];
 
       if (lastBar) {
-        kickPattern = kickPattern.includes(12) ? kickPattern : [...kickPattern, 12];
-        bassPattern = bassPattern.includes(14) ? bassPattern : [...bassPattern, 14];
+        if (!kickPattern.includes(12)) kickPattern.push(12);
+        if (!bassPattern.includes(14)) bassPattern.push(14);
       }
 
-      if (bar === 1 && energy !== "low") {
-        kickPattern = kickPattern.includes(5) ? kickPattern : [...kickPattern, 5];
+      if (bar === 1 && energy !== "low" && !kickPattern.includes(5)) {
+        kickPattern.push(5);
       }
 
-      // Kick
-      if (kickPattern.includes(pos)) {
-        const vol = lastBar && pos === 14 ? 0.78 : 1.0;
-        play(kick, t, vol);
+      if (shouldPlay("kick") && kickPattern.includes(pos)) {
+        play(kick, t, lastBar && pos === 14 ? 0.78 : 1);
       }
 
-      // Snare + clap
-      if (pattern.snare.includes(pos)) play(snare, t, 0.9);
-      if (pattern.clap.includes(pos)) play(clap, t + 0.012, 0.55);
-
-      // Hats with velocity variation
-      if (pattern.hat === "eighths") {
-        if (i % 2 === 0) play(hat, t, pos % 4 === 0 ? 0.34 : 0.24);
-      } else {
-        play(hat, t, 0.25);
+      if (shouldPlay("snare") && pattern.snare.includes(pos)) {
+        play(snare, t, 0.9);
       }
 
-      // Ghost hats
-      if (energy !== "low" && [2, 6, 10, 14].includes(pos)) {
-        play(hat, t + stepTime * 0.48, 0.12);
+      if (shouldPlay("snare") && pattern.clap.includes(pos)) {
+        play(clap, t + 0.012, 0.55);
       }
 
-      // Rolls/fills
-      if ([3, 7, 11, 15].includes(pos)) {
-        play(hat, t + stepTime / 2, 0.17);
+      if (shouldPlay("hats")) {
+        if (pattern.hat === "eighths") {
+          if (i % 2 === 0) play(hat, t, pos % 4 === 0 ? 0.34 : 0.24);
+        } else {
+          play(hat, t, 0.25);
+        }
+
+        if (energy !== "low" && [2, 6, 10, 14].includes(pos)) {
+          play(hat, t + stepTime * 0.48, 0.12);
+        }
+
+        if ([3, 7, 11, 15].includes(pos)) {
+          play(hat, t + stepTime / 2, 0.17);
+        }
+
+        if (lastBar && [14, 15].includes(pos)) {
+          play(hat, t + stepTime / 3, 0.13);
+          play(hat, t + (stepTime * 2) / 3, 0.11);
+        }
       }
 
-      if (lastBar && [14, 15].includes(pos)) {
-        play(hat, t + stepTime / 3, 0.13);
-        play(hat, t + (stepTime * 2) / 3, 0.11);
-      }
-
-      // 808 in key with movement
-      if (bassPattern.includes(pos)) {
+      if (shouldPlay("808") && bassPattern.includes(pos)) {
         let rate = base808Rate;
         if (pos === 6) rate = base808Rate * Math.pow(2, 3 / 12);
         if (pos === 10) rate = base808Rate * Math.pow(2, 5 / 12);
         if (pos === 14) rate = base808Rate * Math.pow(2, 7 / 12);
-
         play(bass808, t, 0.9, rate);
       }
     }
@@ -200,14 +194,12 @@ export default function Home() {
   async function playAILoop() {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
-      const built = await buildLoop(ctx, false);
+      const built = await buildLoop(ctx, false, "full");
 
       setResult((prev) => ({
         ...(prev || {}),
         selectedSamples: built.selected,
-        tuned808Key: prev?.key || "C",
-        controls: { bars: barsControl, swing: swingControl, energy },
-        regenerationSeed
+        controls: { bars: barsControl, swing: swingControl, energy }
       }));
     } catch (err) {
       alert("Error: " + err.message);
@@ -252,7 +244,7 @@ export default function Home() {
     return new Blob([arrayBuffer], { type: "audio/wav" });
   }
 
-  async function downloadWav() {
+  async function downloadWav(stem = "full") {
     try {
       const bpmVal = Number(result?.bpm || bpm || 140);
       const bars = Number(barsControl || result?.bars || 4);
@@ -260,7 +252,7 @@ export default function Home() {
       const sampleRate = 44100;
       const offline = new OfflineAudioContext(2, sampleRate * duration, sampleRate);
 
-      await buildLoop(offline, true);
+      await buildLoop(offline, true, stem);
 
       const rendered = await offline.startRendering();
       const wavBlob = audioBufferToWav(rendered);
@@ -268,7 +260,7 @@ export default function Home() {
       const url = URL.createObjectURL(wavBlob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `mpc-loop-${result?.key || "C"}-${bpmVal}bpm-${bars}bars.wav`;
+      a.download = `mpc-${stem}-${result?.key || "C"}-${bpmVal}bpm-${bars}bars.wav`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (err) {
@@ -302,8 +294,8 @@ export default function Home() {
         Play AI Loop
       </button>
 
-      <button onClick={downloadWav} style={{ padding: 12 }}>
-        Download WAV
+      <button onClick={() => downloadWav("full")} style={{ padding: 12 }}>
+        Download Full Mix
       </button>
 
       <h3>BPM: {bpm}</h3>
@@ -320,6 +312,12 @@ export default function Home() {
       <button onClick={() => setEnergy("low")} style={{ padding: 10, marginRight: 8 }}>Low</button>
       <button onClick={() => setEnergy("medium")} style={{ padding: 10, marginRight: 8 }}>Medium</button>
       <button onClick={() => setEnergy("high")} style={{ padding: 10 }}>High</button>
+
+      <h2>Stem Export</h2>
+      <button onClick={() => downloadWav("kick")} style={{ padding: 10, marginRight: 8 }}>Kick WAV</button>
+      <button onClick={() => downloadWav("snare")} style={{ padding: 10, marginRight: 8 }}>Snare/Clap WAV</button>
+      <button onClick={() => downloadWav("hats")} style={{ padding: 10, marginRight: 8 }}>Hats WAV</button>
+      <button onClick={() => downloadWav("808")} style={{ padding: 10 }}>808 WAV</button>
 
       {result && (
         <div style={{ marginTop: 20, background: "#18181b", padding: 16, borderRadius: 12 }}>
