@@ -1,36 +1,31 @@
 export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
-
-  const { prompt } = req.body;
-
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    const { prompt } = req.body;
+
+    const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are a music loop generator. Return ONLY JSON with bpm, key, scale, style, instrument.",
-          },
-          {
-            role: "user",
-            content: prompt,
-          },
-        ],
-      }),
+        input: `Return ONLY JSON like this:
+{
+  "bpm": number,
+  "key": "F",
+  "scale": "minor",
+  "style": "trap",
+  "instrument": "guitar"
+}
+
+User request: ${prompt}`
+      })
     });
 
     const data = await response.json();
 
-    const text = data.choices[0].message.content;
+    const text = data.output[0].content[0].text;
 
     let parsed;
     try {
@@ -40,7 +35,8 @@ export default async function handler(req, res) {
     }
 
     res.status(200).json(parsed);
+
   } catch (err) {
-    res.status(500).json({ error: "AI request failed" });
+    res.status(500).json({ error: "AI request failed", details: err.message });
   }
 }
