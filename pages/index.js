@@ -41,6 +41,7 @@ export default function Home() {
   const [lockSounds, setLockSounds] = useState(false);
 
   const [uploadingStem, setUploadingStem] = useState(false);
+  const [stemStatus, setStemStatus] = useState("");
   const [stems, setStems] = useState({});
   const [selectedStem, setSelectedStem] = useState("");
   const [selectedStemUrl, setSelectedStemUrl] = useState("");
@@ -90,7 +91,8 @@ export default function Home() {
           clap: p.clap || DEFAULT_PATTERN.clap,
           hat: "sixteenths",
           bass808: Array.from(new Set([...(p.bass808 || DEFAULT_PATTERN.bass808), 3, 12, 14])).sort((a, b) => a - b)
-        }
+        },
+        soundNotes: "Harder mode: more kicks, denser hats, boosted 808 movement, higher energy."
       };
     });
 
@@ -103,6 +105,7 @@ export default function Home() {
 
   function getSelectedSamples() {
     if (lockSounds && lastSamples) return lastSamples;
+
     return lastSamples || {
       kick: pick(SAMPLE_LIBRARY.kicks),
       snare: pick(SAMPLE_LIBRARY.snares),
@@ -157,9 +160,11 @@ export default function Home() {
     function play(buffer, time, volume = 1, rate = 1) {
       const src = ctx.createBufferSource();
       const gain = ctx.createGain();
+
       src.buffer = buffer;
       src.playbackRate.value = rate;
       gain.gain.value = volume * energyBoost;
+
       src.connect(gain);
       gain.connect(ctx.destination);
       src.start(time);
@@ -185,9 +190,17 @@ export default function Home() {
       if (bar === 1 && energy !== "low" && !kickPattern.includes(5)) kickPattern.push(5);
       if (energy === "high" && !kickPattern.includes(14)) kickPattern.push(14);
 
-      if (shouldPlay("kick") && kickPattern.includes(pos)) play(kick, t, lastBar && pos === 14 ? 0.78 : 1);
-      if (shouldPlay("snare") && pattern.snare.includes(pos)) play(snare, t, 0.9);
-      if (shouldPlay("snare") && pattern.clap.includes(pos)) play(clap, t + 0.012, 0.55);
+      if (shouldPlay("kick") && kickPattern.includes(pos)) {
+        play(kick, t, lastBar && pos === 14 ? 0.78 : 1);
+      }
+
+      if (shouldPlay("snare") && pattern.snare.includes(pos)) {
+        play(snare, t, 0.9);
+      }
+
+      if (shouldPlay("snare") && pattern.clap.includes(pos)) {
+        play(clap, t + 0.012, 0.55);
+      }
 
       if (shouldPlay("hats")) {
         if (pattern.hat === "eighths") {
@@ -222,6 +235,7 @@ export default function Home() {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       const built = await buildLoop(ctx, false, "full");
+
       setResult((prev) => ({
         ...(prev || {}),
         selectedSamples: built.selected,
@@ -299,25 +313,84 @@ export default function Home() {
 
     try {
       setUploadingStem(true);
+      setStemStatus("Uploading song...");
+
+      const STEM_API = process.env.NEXT_PUBLIC_STEM_API;
+
+      if (!STEM_API) {
+        alert("Missing NEXT_PUBLIC_STEM_API environment variable.");
+        setUploadingStem(false);
+        setStemStatus("");
+        return;
+      }
 
       const formData = new FormData();
       formData.append("file", file);
 
-      const res = await fetch(`${process.env.NEXT_PUBLIC_STEM_API}/separate`, {
+      const startRes = await fetch(`${STEM_API}/separate`, {
         method: "POST",
         body: formData
       });
 
-      if (!res.ok) {
-        alert("Stem separation failed. Try a shorter file.");
+      const startData = await startRes.json();
+
+      if (!startRes.ok) {
+        alert("Could not start stem job: " + JSON.stringify(startData));
         setUploadingStem(false);
+        setStemStatus("");
         return;
       }
 
-      const zipBlob = await res.blob();
+      const jobId = startData.job_id;
+      let done = false;
+      let attempts = 0;
+
+      while (!done && attempts < 120) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+
+        const statusRes = await fetch(`${STEM_API}/status/${jobId}`);
+        const statusData = await statusRes.json();
+
+        setStemStatus(statusData.message || `Processing... attempt ${attempts + 1}`);
+
+        if (statusData.status === "done") {
+          done = true;
+          break;
+        }
+
+        if (statusData.status === "error") {
+          alert("Stem separation failed: " + statusData.message);
+          setUploadingStem(false);
+          setStemStatus("");
+          return;
+        }
+
+        attempts++;
+      }
+
+      if (!done) {
+        alert("Still processing. Try again with a shorter file.");
+        setUploadingStem(false);
+        setStemStatus("");
+        return;
+      }
+
+      setStemStatus("Downloading stems...");
+
+      const downloadRes = await fetch(`${STEM_API}/download/${jobId}`);
+
+      if (!downloadRes.ok) {
+        alert("Stems finished, but download failed.");
+        setUploadingStem(false);
+        setStemStatus("");
+        return;
+      }
+
+      const zipBlob = await downloadRes.blob();
       const zip = await JSZip.loadAsync(zipBlob);
 
       const loaded = {};
+
       for (const name of ["vocals.wav", "drums.wav", "bass.wav", "other.wav"]) {
         if (zip.files[name]) {
           const blob = await zip.files[name].async("blob");
@@ -335,14 +408,18 @@ export default function Home() {
         setSelectedStemUrl(loaded.drums.url);
       } else {
         const first = Object.keys(loaded)[0];
-        setSelectedStem(first);
-        setSelectedStemUrl(loaded[first].url);
+        if (first) {
+          setSelectedStem(first);
+          setSelectedStemUrl(loaded[first].url);
+        }
       }
 
       setUploadingStem(false);
+      setStemStatus("Stems loaded.");
     } catch (err) {
       alert("Stem error: " + err.message);
       setUploadingStem(false);
+      setStemStatus("");
     }
   }
 
@@ -380,19 +457,15 @@ export default function Home() {
     if (!selectedStem || !stems[selectedStem]) return;
 
     try {
-      const ctx = new OfflineAudioContext(2, 44100 * Math.max(1, chopEnd - chopStart), 44100);
       const arr = await stems[selectedStem].blob.arrayBuffer();
+      const ctx = new AudioContext();
       const decoded = await ctx.decodeAudioData(arr.slice(0));
 
       const startSample = Math.floor(chopStart * decoded.sampleRate);
       const endSample = Math.floor(chopEnd * decoded.sampleRate);
       const length = Math.max(1, endSample - startSample);
 
-      const chopBuffer = new AudioContext().createBuffer(
-        decoded.numberOfChannels,
-        length,
-        decoded.sampleRate
-      );
+      const chopBuffer = ctx.createBuffer(decoded.numberOfChannels, length, decoded.sampleRate);
 
       for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
         const source = decoded.getChannelData(ch).slice(startSample, endSample);
@@ -459,7 +532,12 @@ export default function Home() {
       <h1>MPC LoopBuilder AI</h1>
       <p>AI-powered MPC loop generator, stem separator, and chop editor.</p>
 
-      <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} style={{ width: "100%", minHeight: 100, padding: 12, borderRadius: 10, fontSize: 16 }} />
+      <textarea
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        placeholder="Example: hard trap drums 4 bars 83 bpm F minor with 808 bounce"
+        style={{ width: "100%", minHeight: 100, padding: 12, borderRadius: 10, fontSize: 16 }}
+      />
 
       <br /><br />
 
@@ -481,6 +559,8 @@ export default function Home() {
         {uploadingStem ? "Separating Stems..." : "Upload Song → Separate Stems"}
         <input type="file" accept="audio/*" style={{ display: "none" }} onChange={(e) => uploadAndSeparate(e.target.files?.[0])} />
       </label>
+
+      {stemStatus && <p>{stemStatus}</p>}
 
       <h3>BPM: {bpm}</h3>
       <input type="range" min="60" max="180" value={bpm} onChange={(e) => setBpm(Number(e.target.value))} style={{ width: "100%" }} />
@@ -536,4 +616,4 @@ export default function Home() {
       )}
     </div>
   );
-                                         }
+  }
