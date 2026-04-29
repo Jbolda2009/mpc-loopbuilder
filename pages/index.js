@@ -24,12 +24,12 @@ const SAMPLE_LIBRARY = {
     "/samples/hat6.wav"
   ],
   claps: [
-  "/samples/Clap1.wav",
-  "/samples/Clap2.wav",
-  "/samples/Clap3.wav",
-  "/samples/Clap4.wav",
-  "/samples/Clap5.wav"
-],
+    "/samples/Clap1.wav",
+    "/samples/Clap2.wav",
+    "/samples/Clap3.wav",
+    "/samples/Clap4.wav",
+    "/samples/Clap5.wav"
+  ],
   bass808: [
     "/samples/808_1.wav",
     "/samples/808_2.wav",
