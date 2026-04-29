@@ -5,7 +5,7 @@ export default async function handler(req, res) {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -14,16 +14,32 @@ export default async function handler(req, res) {
         messages: [
           {
             role: "system",
-            content: "You are an expert music producer and loop designer. Return only valid JSON for an MPC-ready loop."
+            content:
+              "You are an expert modern music producer. Return only valid JSON for an MPC-ready drum loop."
           },
           {
             role: "user",
-            content: `Create an MPC-ready loop plan from this request: ${prompt}
+            content: `Create a modern drum loop plan from this request: ${prompt}
 
-Return JSON with:
-bpm, key, scale, genre, instrument, mood, bars, drumPattern, bassPattern, melodyPattern, chordProgression, bounce, soundNotes.
+Return JSON exactly with:
+{
+  "bpm": number,
+  "key": "C",
+  "scale": "minor",
+  "genre": "trap",
+  "mood": "dark",
+  "bars": 4,
+  "drumPattern": {
+    "kick": [0,3,7,10,14],
+    "snare": [8],
+    "clap": [8],
+    "hat": "eighths",
+    "bass808": [0,6,10]
+  },
+  "soundNotes": "short producer notes"
+}
 
-Use modern producer language. Keep bars either 4 or 8 unless user asks otherwise.`
+The drum step grid is 16 steps per bar. Use numbers 0 through 15 only.`
           }
         ]
       })
@@ -32,12 +48,18 @@ Use modern producer language. Keep bars either 4 or 8 unless user asks otherwise
     const data = await response.json();
 
     if (!response.ok) {
-      return res.status(500).json({ error: "OpenAI error", full: data });
+      return res.status(500).json({
+        error: "OpenAI error",
+        full: data
+      });
     }
 
     const text = data.choices?.[0]?.message?.content || "{}";
     return res.status(200).json(JSON.parse(text));
   } catch (err) {
-    return res.status(500).json({ error: "Server crash", details: err.message });
+    return res.status(500).json({
+      error: "Server crash",
+      details: err.message
+    });
   }
 }
