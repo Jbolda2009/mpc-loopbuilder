@@ -1,120 +1,185 @@
 import { useState } from "react";
 
-const KEYS = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const SAMPLE_LIBRARY = {
+  kicks: [
+    "/samples/Kicks/kick1.wav",
+    "/samples/Kicks/kick2.wav",
+    "/samples/Kicks/kick3.wav",
+    "/samples/Kicks/kick4.wav",
+    "/samples/Kicks/kick5.wav"
+  ],
+  snares: [
+    "/samples/Snare/Snare1.wav",
+    "/samples/Snare/Snare2.wav",
+    "/samples/Snare/Snare3.wav",
+    "/samples/Snare/Snare4.wav",
+    "/samples/Snare/Snare5.wav"
+  ],
+  hats: [
+    "/samples/Hats/hat1.wav",
+    "/samples/Hats/hat2.wav",
+    "/samples/Hats/hat3.wav",
+    "/samples/Hats/hat4.wav",
+    "/samples/Hats/hat5.wav",
+    "/samples/Hats/hat6.wav"
+  ],
+  claps: [
+    "/samples/Claps/Clap1.wav",
+    "/samples/Claps/Clap2.wav",
+    "/samples/Claps/Clap3.wav",
+    "/samples/Claps/Clap4.wav",
+    "/samples/Claps/Clap5.wav"
+  ],
+  bass808: [
+    "/samples/808s/808_1.wav",
+    "/samples/808s/808_2.wav",
+    "/samples/808s/808_3.wav",
+    "/samples/808s/808_4.wav",
+    "/samples/808s/808_5.wav",
+    "/samples/808s/808_6.wav",
+    "/samples/808s/808_7.wav",
+    "/samples/808s/808_8.wav",
+    "/samples/808s/808_9.wav"
+  ]
+};
 
 export default function Home() {
-  const [prompt, setPrompt] = useState("dark trap guitar 140 bpm C minor 8 bars");
+  const [prompt, setPrompt] = useState("Trap drum pattern 4 bars 83 bpm");
   const [result, setResult] = useState(null);
-  const [bpm, setBpm] = useState(140);
+  const [bpm, setBpm] = useState(83);
   const [loading, setLoading] = useState(false);
 
   async function generateLoop() {
     setLoading(true);
+
     const res = await fetch("/api/generate", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json"
+      },
       body: JSON.stringify({ prompt })
     });
 
     const data = await res.json();
     setResult(data);
-    if (data.bpm) setBpm(Number(data.bpm));
+
+    if (data.bpm) {
+      setBpm(Number(data.bpm));
+    }
+
     setLoading(false);
   }
 
-  function freqFor(key = "C", degree = 0, octave = 0) {
-    const minor = [0, 2, 3, 5, 7, 8, 10];
-    const root = KEYS.indexOf(key);
-    const note = (root + minor[degree % minor.length]) % 12;
-    return 261.63 * Math.pow(2, (note / 12) + octave);
+  function pick(list) {
+    return list[Math.floor(Math.random() * list.length)];
   }
 
-  function playLoop() {
-    if (!result) return alert("Generate a loop first.");
+  async function loadSample(ctx, url) {
+    const res = await fetch(url);
 
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const bpmVal = Number(result.bpm || bpm);
-    const spb = 60 / bpmVal;
-    const bars = Number(result.bars || 8);
-    const beats = bars * 4;
-    const start = ctx.currentTime + 0.1;
-    const key = result.key || "C";
-    const genre = (result.genre || result.style || "").toLowerCase();
-
-    function tone(freq, time, dur, type = "triangle", gainVal = 0.18) {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      const filter = ctx.createBiquadFilter();
-
-      osc.type = type;
-      osc.frequency.value = freq;
-      filter.type = "lowpass";
-      filter.frequency.value = genre.includes("trap") ? 1800 : 2600;
-
-      gain.gain.setValueAtTime(0.001, time);
-      gain.gain.linearRampToValueAtTime(gainVal, time + 0.01);
-      gain.gain.exponentialRampToValueAtTime(0.001, time + dur);
-
-      osc.connect(filter);
-      filter.connect(gain);
-      gain.connect(ctx.destination);
-
-      osc.start(time);
-      osc.stop(time + dur);
+    if (!res.ok) {
+      throw new Error(`Could not load sample: ${url}`);
     }
 
-    function kick(t) {
-      tone(60, t, 0.18, "sine", 0.9);
-    }
+    const arrayBuffer = await res.arrayBuffer();
+    return await ctx.decodeAudioData(arrayBuffer);
+  }
 
-    function snare(t) {
-      tone(180, t, 0.08, "square", 0.22);
-    }
+  async function playAILoop() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
 
-    function hat(t) {
-      tone(9000, t, 0.025, "square", 0.035);
-    }
+      const selected = {
+        kick: pick(SAMPLE_LIBRARY.kicks),
+        snare: pick(SAMPLE_LIBRARY.snares),
+        hat: pick(SAMPLE_LIBRARY.hats),
+        clap: pick(SAMPLE_LIBRARY.claps),
+        bass808: pick(SAMPLE_LIBRARY.bass808)
+      };
 
-    const melody = genre.includes("gospel")
-      ? [0, 2, 4, 5, 6, 5, 4, 2]
-      : genre.includes("r&b") || genre.includes("soul")
-      ? [0, 4, 5, 2, 1, 2, 4, 0]
-      : genre.includes("drill")
-      ? [0, 1, 3, 4, 3, 1, 0, 5]
-      : [0, 2, 4, 5, 4, 2, 1, 0];
+      const kick = await loadSample(ctx, selected.kick);
+      const snare = await loadSample(ctx, selected.snare);
+      const hat = await loadSample(ctx, selected.hat);
+      const clap = await loadSample(ctx, selected.clap);
+      const bass808 = await loadSample(ctx, selected.bass808);
 
-    for (let b = 0; b < beats; b++) {
-      let t = start + b * spb;
-      if (b % 2 === 1) t += spb * 0.05;
+      const bpmValue = Number(result?.bpm || bpm || 140);
+      const secondsPerBeat = 60 / bpmValue;
+      const bars = Number(result?.bars || 4);
+      const stepsPerBar = 16;
+      const totalSteps = bars * stepsPerBar;
+      const stepTime = secondsPerBeat / 4;
+      const start = ctx.currentTime + 0.12;
+      const swing = 0.035;
 
-      if (genre.includes("trap") || genre.includes("drill")) {
-        if (b % 4 === 0 || b % 4 === 3) kick(t);
-        if (b % 4 === 2) snare(t);
-        hat(t);
-        hat(t + spb / 2);
-        if (b % 4 === 3) hat(t + spb * 0.75);
-      } else {
-        if (b % 4 === 0) kick(t);
-        if (b % 4 === 2) snare(t);
-        hat(t + spb / 2);
+      function play(buffer, time, volume = 1, playbackRate = 1) {
+        const source = ctx.createBufferSource();
+        const gain = ctx.createGain();
+
+        source.buffer = buffer;
+        source.playbackRate.value = playbackRate;
+        gain.gain.value = volume;
+
+        source.connect(gain);
+        gain.connect(ctx.destination);
+        source.start(time);
       }
 
-      if (b % 2 === 0) {
-        const step = melody[b % melody.length];
-        tone(freqFor(key, step, 0), t, spb * 1.6, "triangle", 0.22);
-        tone(freqFor(key, step, -1), t, spb, "sine", 0.13);
+      for (let step = 0; step < totalSteps; step++) {
+        let time = start + step * stepTime;
+
+        if (step % 2 === 1) {
+          time += stepTime * swing;
+        }
+
+        const position = step % 16;
+
+        // Trap-style kicks
+        if ([0, 3, 7, 10, 14].includes(position)) {
+          play(kick, time, 1.0);
+        }
+
+        // Snare/clap on 3
+        if (position === 8) {
+          play(snare, time, 0.85);
+          play(clap, time + 0.01, 0.45);
+        }
+
+        // Hats
+        if (step % 2 === 0) {
+          play(hat, time, 0.35);
+        }
+
+        // Hat rolls
+        if ([6, 7, 14, 15].includes(position)) {
+          play(hat, time + stepTime / 2, 0.22);
+        }
+
+        // 808 hits
+        if ([0, 7, 10].includes(position)) {
+          play(bass808, time, 0.8);
+        }
       }
+
+      setResult((prev) => ({
+        ...(prev || {}),
+        selectedSamples: selected
+      }));
+    } catch (err) {
+      alert(err.message);
     }
   }
 
   return (
-    <div style={{
-      padding: 24,
-      fontFamily: "Arial, sans-serif",
-      background: "#0d0d0f",
-      color: "white",
-      minHeight: "100vh"
-    }}>
+    <div
+      style={{
+        padding: 24,
+        fontFamily: "Arial, sans-serif",
+        background: "#0d0d0f",
+        color: "white",
+        minHeight: "100vh"
+      }}
+    >
       <h1 style={{ fontSize: 34 }}>MPC LoopBuilder AI</h1>
       <p>Prompt-based AI loop generator for MPC Key 37.</p>
 
@@ -131,13 +196,14 @@ export default function Home() {
         }}
       />
 
-      <br /><br />
+      <br />
+      <br />
 
       <button onClick={generateLoop} style={{ padding: 12, marginRight: 10 }}>
         {loading ? "Generating..." : "Generate Loop"}
       </button>
 
-      <button onClick={playLoop} style={{ padding: 12 }}>
+      <button onClick={playAILoop} style={{ padding: 12 }}>
         Play AI Loop
       </button>
 
@@ -153,12 +219,14 @@ export default function Home() {
       />
 
       {result && (
-        <div style={{
-          marginTop: 20,
-          background: "#18181b",
-          padding: 16,
-          borderRadius: 12
-        }}>
+        <div
+          style={{
+            marginTop: 20,
+            background: "#18181b",
+            padding: 16,
+            borderRadius: 12
+          }}
+        >
           <h2>Loop Plan</h2>
           <pre style={{ whiteSpace: "pre-wrap" }}>
             {JSON.stringify(result, null, 2)}
