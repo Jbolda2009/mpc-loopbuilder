@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import JSZip from "jszip";
 
 const SAMPLE_LIBRARY = {
@@ -28,6 +28,8 @@ function get808PlaybackRate(key = "C") {
 }
 
 export default function Home() {
+  const audioRef = useRef(null);
+
   const [prompt, setPrompt] = useState("Hard trap drums 4 bars 83 bpm F minor with 808 bounce");
   const [result, setResult] = useState(null);
   const [bpm, setBpm] = useState(83);
@@ -36,12 +38,19 @@ export default function Home() {
   const [swingControl, setSwingControl] = useState(18);
   const [energy, setEnergy] = useState("medium");
   const [lastSamples, setLastSamples] = useState(null);
-  const [uploadingAudio, setUploadingAudio] = useState(false);
-  const [uploadedAudioName, setUploadedAudioName] = useState("");
+  const [lockSounds, setLockSounds] = useState(false);
+
+  const [uploadingStem, setUploadingStem] = useState(false);
+  const [stems, setStems] = useState({});
+  const [selectedStem, setSelectedStem] = useState("");
+  const [selectedStemUrl, setSelectedStemUrl] = useState("");
+  const [stemDuration, setStemDuration] = useState(0);
+  const [chopStart, setChopStart] = useState(0);
+  const [chopEnd, setChopEnd] = useState(4);
 
   async function generateLoop() {
     setLoading(true);
-    setLastSamples(null);
+    if (!lockSounds) setLastSamples(null);
 
     const res = await fetch("/api/generate", {
       method: "POST",
@@ -56,47 +65,36 @@ export default function Home() {
     if (data.bars) setBarsControl(Number(data.bars));
 
     setLoading(false);
-  }
-
-  async function analyzeUploadedBeat(file) {
-    if (!file) return;
-
-    try {
-      setUploadingAudio(true);
-      setUploadedAudioName(file.name);
-
-      const formData = new FormData();
-      formData.append("audio", file);
-
-      const res = await fetch("/api/analyze-audio", {
-        method: "POST",
-        body: formData
-      });
-
-      const data = await res.json();
-
-      if (!res.ok) {
-        alert("AI audio analysis failed: " + JSON.stringify(data));
-        setUploadingAudio(false);
-        return;
-      }
-
-      setResult(data);
-
-      if (data.bpm) setBpm(Number(data.bpm));
-      if (data.bars) setBarsControl(Number(data.bars));
-      if (data.promptSuggestion) setPrompt(data.promptSuggestion);
-
-      setLastSamples(null);
-      setUploadingAudio(false);
-    } catch (err) {
-      alert("Upload error: " + err.message);
-      setUploadingAudio(false);
-    }
+    setTimeout(() => playAILoop(), 250);
   }
 
   function regenerate() {
-    setLastSamples(null);
+    if (!lockSounds) setLastSamples(null);
+    setTimeout(() => playAILoop(), 100);
+  }
+
+  function makeItHarder() {
+    setEnergy("high");
+    setSwingControl(22);
+
+    setResult((prev) => {
+      const current = prev || {};
+      const p = current.drumPattern || DEFAULT_PATTERN;
+
+      return {
+        ...current,
+        drumPattern: {
+          ...p,
+          kick: Array.from(new Set([...(p.kick || DEFAULT_PATTERN.kick), 5, 12, 14])).sort((a, b) => a - b),
+          snare: p.snare || DEFAULT_PATTERN.snare,
+          clap: p.clap || DEFAULT_PATTERN.clap,
+          hat: "sixteenths",
+          bass808: Array.from(new Set([...(p.bass808 || DEFAULT_PATTERN.bass808), 3, 12, 14])).sort((a, b) => a - b)
+        }
+      };
+    });
+
+    setTimeout(() => playAILoop(), 200);
   }
 
   function pick(arr) {
@@ -104,6 +102,7 @@ export default function Home() {
   }
 
   function getSelectedSamples() {
+    if (lockSounds && lastSamples) return lastSamples;
     return lastSamples || {
       kick: pick(SAMPLE_LIBRARY.kicks),
       snare: pick(SAMPLE_LIBRARY.snares),
@@ -132,7 +131,6 @@ export default function Home() {
 
   async function buildLoop(ctx, exportMode = false, stem = "full") {
     const selected = getSelectedSamples();
-
     if (!lastSamples && !exportMode) setLastSamples(selected);
 
     const kick = await loadSample(ctx, selected.kick);
@@ -150,7 +148,7 @@ export default function Home() {
     const pattern = getPattern();
     const key = result?.key || "C";
     const base808Rate = get808PlaybackRate(key);
-    const energyBoost = energy === "high" ? 1.15 : energy === "low" ? 0.82 : 1;
+    const energyBoost = energy === "high" ? 1.2 : energy === "low" ? 0.82 : 1;
 
     function shouldPlay(type) {
       return stem === "full" || stem === type;
@@ -159,11 +157,9 @@ export default function Home() {
     function play(buffer, time, volume = 1, rate = 1) {
       const src = ctx.createBufferSource();
       const gain = ctx.createGain();
-
       src.buffer = buffer;
       src.playbackRate.value = rate;
       gain.gain.value = volume * energyBoost;
-
       src.connect(gain);
       gain.connect(ctx.destination);
       src.start(time);
@@ -186,21 +182,12 @@ export default function Home() {
         if (!bassPattern.includes(14)) bassPattern.push(14);
       }
 
-      if (bar === 1 && energy !== "low" && !kickPattern.includes(5)) {
-        kickPattern.push(5);
-      }
+      if (bar === 1 && energy !== "low" && !kickPattern.includes(5)) kickPattern.push(5);
+      if (energy === "high" && !kickPattern.includes(14)) kickPattern.push(14);
 
-      if (shouldPlay("kick") && kickPattern.includes(pos)) {
-        play(kick, t, lastBar && pos === 14 ? 0.78 : 1);
-      }
-
-      if (shouldPlay("snare") && pattern.snare.includes(pos)) {
-        play(snare, t, 0.9);
-      }
-
-      if (shouldPlay("snare") && pattern.clap.includes(pos)) {
-        play(clap, t + 0.012, 0.55);
-      }
+      if (shouldPlay("kick") && kickPattern.includes(pos)) play(kick, t, lastBar && pos === 14 ? 0.78 : 1);
+      if (shouldPlay("snare") && pattern.snare.includes(pos)) play(snare, t, 0.9);
+      if (shouldPlay("snare") && pattern.clap.includes(pos)) play(clap, t + 0.012, 0.55);
 
       if (shouldPlay("hats")) {
         if (pattern.hat === "eighths") {
@@ -209,15 +196,10 @@ export default function Home() {
           play(hat, t, 0.25);
         }
 
-        if (energy !== "low" && [2, 6, 10, 14].includes(pos)) {
-          play(hat, t + stepTime * 0.48, 0.12);
-        }
+        if (energy !== "low" && [2, 6, 10, 14].includes(pos)) play(hat, t + stepTime * 0.48, 0.12);
+        if ([3, 7, 11, 15].includes(pos)) play(hat, t + stepTime / 2, 0.17);
 
-        if ([3, 7, 11, 15].includes(pos)) {
-          play(hat, t + stepTime / 2, 0.17);
-        }
-
-        if (lastBar && [14, 15].includes(pos)) {
+        if ((lastBar || energy === "high") && [14, 15].includes(pos)) {
           play(hat, t + stepTime / 3, 0.13);
           play(hat, t + (stepTime * 2) / 3, 0.11);
         }
@@ -225,10 +207,11 @@ export default function Home() {
 
       if (shouldPlay("808") && bassPattern.includes(pos)) {
         let rate = base808Rate;
+        if (pos === 3) rate = base808Rate * Math.pow(2, 2 / 12);
         if (pos === 6) rate = base808Rate * Math.pow(2, 3 / 12);
         if (pos === 10) rate = base808Rate * Math.pow(2, 5 / 12);
         if (pos === 14) rate = base808Rate * Math.pow(2, 7 / 12);
-        play(bass808, t, 0.9, rate);
+        play(bass808, t, 0.92, rate);
       }
     }
 
@@ -239,11 +222,10 @@ export default function Home() {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
       const built = await buildLoop(ctx, false, "full");
-
       setResult((prev) => ({
         ...(prev || {}),
         selectedSamples: built.selected,
-        controls: { bars: barsControl, swing: swingControl, energy }
+        controls: { bars: barsControl, swing: swingControl, energy, lockSounds }
       }));
     } catch (err) {
       alert("Error: " + err.message);
@@ -312,6 +294,123 @@ export default function Home() {
     }
   }
 
+  async function uploadAndSeparate(file) {
+    if (!file) return;
+
+    try {
+      setUploadingStem(true);
+
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const res = await fetch(`${process.env.NEXT_PUBLIC_STEM_API}/separate`, {
+        method: "POST",
+        body: formData
+      });
+
+      if (!res.ok) {
+        alert("Stem separation failed. Try a shorter file.");
+        setUploadingStem(false);
+        return;
+      }
+
+      const zipBlob = await res.blob();
+      const zip = await JSZip.loadAsync(zipBlob);
+
+      const loaded = {};
+      for (const name of ["vocals.wav", "drums.wav", "bass.wav", "other.wav"]) {
+        if (zip.files[name]) {
+          const blob = await zip.files[name].async("blob");
+          loaded[name.replace(".wav", "")] = {
+            blob,
+            url: URL.createObjectURL(blob)
+          };
+        }
+      }
+
+      setStems(loaded);
+
+      if (loaded.drums) {
+        setSelectedStem("drums");
+        setSelectedStemUrl(loaded.drums.url);
+      } else {
+        const first = Object.keys(loaded)[0];
+        setSelectedStem(first);
+        setSelectedStemUrl(loaded[first].url);
+      }
+
+      setUploadingStem(false);
+    } catch (err) {
+      alert("Stem error: " + err.message);
+      setUploadingStem(false);
+    }
+  }
+
+  function selectStem(name) {
+    setSelectedStem(name);
+    setSelectedStemUrl(stems[name].url);
+    setChopStart(0);
+    setChopEnd(Math.min(4, stemDuration || 4));
+  }
+
+  function onStemLoaded() {
+    const d = audioRef.current?.duration || 0;
+    setStemDuration(d);
+    setChopStart(0);
+    setChopEnd(Math.min(4, d));
+  }
+
+  function playChop() {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    audio.currentTime = Number(chopStart);
+    audio.play();
+
+    const stopAt = Number(chopEnd);
+    const timer = setInterval(() => {
+      if (audio.currentTime >= stopAt) {
+        audio.pause();
+        clearInterval(timer);
+      }
+    }, 50);
+  }
+
+  async function downloadChop() {
+    if (!selectedStem || !stems[selectedStem]) return;
+
+    try {
+      const ctx = new OfflineAudioContext(2, 44100 * Math.max(1, chopEnd - chopStart), 44100);
+      const arr = await stems[selectedStem].blob.arrayBuffer();
+      const decoded = await ctx.decodeAudioData(arr.slice(0));
+
+      const startSample = Math.floor(chopStart * decoded.sampleRate);
+      const endSample = Math.floor(chopEnd * decoded.sampleRate);
+      const length = Math.max(1, endSample - startSample);
+
+      const chopBuffer = new AudioContext().createBuffer(
+        decoded.numberOfChannels,
+        length,
+        decoded.sampleRate
+      );
+
+      for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+        const source = decoded.getChannelData(ch).slice(startSample, endSample);
+        chopBuffer.copyToChannel(source, ch);
+      }
+
+      const wavBlob = audioBufferToWav(chopBuffer);
+      const url = URL.createObjectURL(wavBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `chop-${selectedStem}-${chopStart.toFixed(2)}-${chopEnd.toFixed(2)}.wav`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("Chop export error: " + err.message);
+    }
+  }
+
   async function exportMpcKitZip() {
     try {
       const selected = getSelectedSamples();
@@ -331,28 +430,24 @@ export default function Home() {
       await addFileToZip(selected.clap, "clap.wav");
       await addFileToZip(selected.bass808, "808.wav");
 
-      const kitInfo = {
+      folder.file("kit-info.json", JSON.stringify({
         app: "MPC LoopBuilder AI",
         bpm,
         bars: barsControl,
         swing: swingControl,
         energy,
+        lockSounds,
         prompt,
         loopPlan: result,
-        selectedSamples: selected,
-        instructions: "Copy this folder to SD/USB, load WAVs into MPC pads, then save as a Drum Program."
-      };
-
-      folder.file("kit-info.json", JSON.stringify(kitInfo, null, 2));
+        selectedSamples: selected
+      }, null, 2));
 
       const zipBlob = await zip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(zipBlob);
-
       const a = document.createElement("a");
       a.href = url;
       a.download = `mpc-kit-${result?.key || "C"}-${bpm}bpm.zip`;
       a.click();
-
       URL.revokeObjectURL(url);
     } catch (err) {
       alert("MPC Kit ZIP error: " + err.message);
@@ -362,50 +457,30 @@ export default function Home() {
   return (
     <div style={{ padding: 24, fontFamily: "Arial", background: "#0d0d0f", color: "white", minHeight: "100vh" }}>
       <h1>MPC LoopBuilder AI</h1>
-      <p>AI-powered MPC loop generator using your real drum samples.</p>
+      <p>AI-powered MPC loop generator, stem separator, and chop editor.</p>
 
-      <textarea
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-        placeholder="Example: hard trap drums 4 bars 83 bpm F minor with 808 bounce"
-        style={{ width: "100%", minHeight: 100, padding: 12, borderRadius: 10, fontSize: 16 }}
-      />
+      <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} style={{ width: "100%", minHeight: 100, padding: 12, borderRadius: 10, fontSize: 16 }} />
 
       <br /><br />
 
-      <button onClick={generateLoop} style={{ padding: 12, marginRight: 10 }}>
-        {loading ? "Generating..." : "Generate Loop"}
-      </button>
-
-      <button onClick={regenerate} style={{ padding: 12, marginRight: 10 }}>
-        Regenerate
-      </button>
-
-      <button onClick={playAILoop} style={{ padding: 12, marginRight: 10 }}>
-        Play AI Loop
-      </button>
-
-      <button onClick={() => downloadWav("full")} style={{ padding: 12, marginRight: 10 }}>
-        Download Full Mix
-      </button>
-
-      <button onClick={exportMpcKitZip} style={{ padding: 12 }}>
-        Export MPC Kit ZIP
-      </button>
+      <button onClick={generateLoop} style={{ padding: 12, marginRight: 10 }}>{loading ? "Generating..." : "Generate Loop"}</button>
+      <button onClick={regenerate} style={{ padding: 12, marginRight: 10 }}>Regenerate</button>
+      <button onClick={playAILoop} style={{ padding: 12, marginRight: 10 }}>Play AI Loop</button>
+      <button onClick={makeItHarder} style={{ padding: 12, marginRight: 10 }}>Make It Harder 🔥</button>
+      <button onClick={() => downloadWav("full")} style={{ padding: 12, marginRight: 10 }}>Download Full Mix</button>
+      <button onClick={exportMpcKitZip} style={{ padding: 12 }}>Export MPC Kit ZIP</button>
 
       <br /><br />
 
-      <label style={{ display: "inline-block", padding: 12, background: "#eee", color: "#111", marginTop: 10 }}>
-        {uploadingAudio ? "Analyzing Beat..." : "Upload Beat for AI Idea"}
-        <input
-          type="file"
-          accept="audio/*"
-          style={{ display: "none" }}
-          onChange={(e) => analyzeUploadedBeat(e.target.files?.[0])}
-        />
+      <label style={{ display: "inline-block", padding: 12, background: lockSounds ? "#facc15" : "#eee", color: "#111", marginRight: 10 }}>
+        <input type="checkbox" checked={lockSounds} onChange={(e) => setLockSounds(e.target.checked)} style={{ marginRight: 8 }} />
+        Lock Sounds
       </label>
 
-      {uploadedAudioName && <p>Uploaded: {uploadedAudioName}</p>}
+      <label style={{ display: "inline-block", padding: 12, background: "#22c55e", color: "#111", marginTop: 10 }}>
+        {uploadingStem ? "Separating Stems..." : "Upload Song → Separate Stems"}
+        <input type="file" accept="audio/*" style={{ display: "none" }} onChange={(e) => uploadAndSeparate(e.target.files?.[0])} />
+      </label>
 
       <h3>BPM: {bpm}</h3>
       <input type="range" min="60" max="180" value={bpm} onChange={(e) => setBpm(Number(e.target.value))} style={{ width: "100%" }} />
@@ -428,6 +503,31 @@ export default function Home() {
       <button onClick={() => downloadWav("hats")} style={{ padding: 10, marginRight: 8 }}>Hats WAV</button>
       <button onClick={() => downloadWav("808")} style={{ padding: 10 }}>808 WAV</button>
 
+      {Object.keys(stems).length > 0 && (
+        <div style={{ marginTop: 30, background: "#18181b", padding: 16, borderRadius: 12 }}>
+          <h2>Chop Editor</h2>
+
+          {Object.keys(stems).map((name) => (
+            <button key={name} onClick={() => selectStem(name)} style={{ padding: 10, marginRight: 8, background: selectedStem === name ? "#facc15" : "#eee" }}>
+              {name}
+            </button>
+          ))}
+
+          <br /><br />
+
+          <audio ref={audioRef} controls src={selectedStemUrl} onLoadedMetadata={onStemLoaded} style={{ width: "100%" }} />
+
+          <h3>Start: {Number(chopStart).toFixed(2)} sec</h3>
+          <input type="range" min="0" max={stemDuration} step="0.01" value={chopStart} onChange={(e) => setChopStart(Number(e.target.value))} style={{ width: "100%" }} />
+
+          <h3>End: {Number(chopEnd).toFixed(2)} sec</h3>
+          <input type="range" min="0" max={stemDuration} step="0.01" value={chopEnd} onChange={(e) => setChopEnd(Number(e.target.value))} style={{ width: "100%" }} />
+
+          <button onClick={playChop} style={{ padding: 12, marginRight: 10 }}>Preview Chop</button>
+          <button onClick={downloadChop} style={{ padding: 12 }}>Download Chop WAV</button>
+        </div>
+      )}
+
       {result && (
         <div style={{ marginTop: 20, background: "#18181b", padding: 16, borderRadius: 12 }}>
           <h2>Loop Plan</h2>
@@ -436,4 +536,4 @@ export default function Home() {
       )}
     </div>
   );
-          }
+                                         }
