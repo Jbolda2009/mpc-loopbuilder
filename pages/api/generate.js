@@ -10,7 +10,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        input: `Return ONLY JSON like this:
+        input: `Return ONLY JSON like:
 {
   "bpm": number,
   "key": "F",
@@ -25,9 +25,14 @@ User request: ${prompt}`
 
     const data = await response.json();
 
-    const text = data.output[0].content[0].text;
+    // 🔥 SAFE parsing (handles different formats)
+    let text =
+      data.output?.[0]?.content?.[0]?.text ||
+      data.choices?.[0]?.message?.content ||
+      "";
 
     let parsed;
+
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -37,6 +42,9 @@ User request: ${prompt}`
     res.status(200).json(parsed);
 
   } catch (err) {
-    res.status(500).json({ error: "AI request failed", details: err.message });
+    res.status(500).json({
+      error: "AI request failed",
+      details: err.message
+    });
   }
 }
