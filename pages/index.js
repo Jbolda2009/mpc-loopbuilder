@@ -1,4 +1,5 @@
 import { useState } from "react";
+import JSZip from "jszip";
 
 const SAMPLE_LIBRARY = {
   kicks: ["/samples/kick1.wav", "/samples/kick2.wav", "/samples/kick3.wav", "/samples/kick4.wav", "/samples/kick5.wav"],
@@ -102,6 +103,16 @@ export default function Home() {
     return arr[Math.floor(Math.random() * arr.length)];
   }
 
+  function getSelectedSamples() {
+    return lastSamples || {
+      kick: pick(SAMPLE_LIBRARY.kicks),
+      snare: pick(SAMPLE_LIBRARY.snares),
+      hat: pick(SAMPLE_LIBRARY.hats),
+      clap: pick(SAMPLE_LIBRARY.claps),
+      bass808: pick(SAMPLE_LIBRARY.bass808)
+    };
+  }
+
   function getPattern() {
     return {
       kick: result?.drumPattern?.kick || DEFAULT_PATTERN.kick,
@@ -120,13 +131,7 @@ export default function Home() {
   }
 
   async function buildLoop(ctx, exportMode = false, stem = "full") {
-    const selected = lastSamples || {
-      kick: pick(SAMPLE_LIBRARY.kicks),
-      snare: pick(SAMPLE_LIBRARY.snares),
-      hat: pick(SAMPLE_LIBRARY.hats),
-      clap: pick(SAMPLE_LIBRARY.claps),
-      bass808: pick(SAMPLE_LIBRARY.bass808)
-    };
+    const selected = getSelectedSamples();
 
     if (!lastSamples && !exportMode) setLastSamples(selected);
 
@@ -307,6 +312,53 @@ export default function Home() {
     }
   }
 
+  async function exportMpcKitZip() {
+    try {
+      const selected = getSelectedSamples();
+      const zip = new JSZip();
+      const folder = zip.folder("MPC_LoopBuilder_Kit");
+
+      async function addFileToZip(path, name) {
+        const res = await fetch(path);
+        if (!res.ok) throw new Error("Missing file: " + path);
+        const blob = await res.blob();
+        folder.file(name, blob);
+      }
+
+      await addFileToZip(selected.kick, "kick.wav");
+      await addFileToZip(selected.snare, "snare.wav");
+      await addFileToZip(selected.hat, "hat.wav");
+      await addFileToZip(selected.clap, "clap.wav");
+      await addFileToZip(selected.bass808, "808.wav");
+
+      const kitInfo = {
+        app: "MPC LoopBuilder AI",
+        bpm,
+        bars: barsControl,
+        swing: swingControl,
+        energy,
+        prompt,
+        loopPlan: result,
+        selectedSamples: selected,
+        instructions: "Copy this folder to SD/USB, load WAVs into MPC pads, then save as a Drum Program."
+      };
+
+      folder.file("kit-info.json", JSON.stringify(kitInfo, null, 2));
+
+      const zipBlob = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(zipBlob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `mpc-kit-${result?.key || "C"}-${bpm}bpm.zip`;
+      a.click();
+
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("MPC Kit ZIP error: " + err.message);
+    }
+  }
+
   return (
     <div style={{ padding: 24, fontFamily: "Arial", background: "#0d0d0f", color: "white", minHeight: "100vh" }}>
       <h1>MPC LoopBuilder AI</h1>
@@ -336,6 +388,12 @@ export default function Home() {
       <button onClick={() => downloadWav("full")} style={{ padding: 12, marginRight: 10 }}>
         Download Full Mix
       </button>
+
+      <button onClick={exportMpcKitZip} style={{ padding: 12 }}>
+        Export MPC Kit ZIP
+      </button>
+
+      <br /><br />
 
       <label style={{ display: "inline-block", padding: 12, background: "#eee", color: "#111", marginTop: 10 }}>
         {uploadingAudio ? "Analyzing Beat..." : "Upload Beat for AI Idea"}
@@ -378,4 +436,4 @@ export default function Home() {
       )}
     </div>
   );
-        }
+          }
