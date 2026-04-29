@@ -17,25 +17,12 @@ const DEFAULT_PATTERN = {
 };
 
 const NOTE_MAP = {
-  C: 0,
-  "C#": 1,
-  D: 2,
-  "D#": 3,
-  E: 4,
-  F: 5,
-  "F#": 6,
-  G: 7,
-  "G#": 8,
-  A: 9,
-  "A#": 10,
-  B: 11
+  C: 0, "C#": 1, D: 2, "D#": 3, E: 4, F: 5,
+  "F#": 6, G: 7, "G#": 8, A: 9, "A#": 10, B: 11
 };
 
 function get808PlaybackRate(key = "C") {
   const semitone = NOTE_MAP[key] ?? 0;
-
-  // Assumes your 808 samples are tuned to C.
-  // The -12 drops it one octave so it stays deep.
   return Math.pow(2, (semitone - 12) / 12);
 }
 
@@ -44,27 +31,35 @@ export default function Home() {
   const [result, setResult] = useState(null);
   const [bpm, setBpm] = useState(83);
   const [loading, setLoading] = useState(false);
+
+  const [barsControl, setBarsControl] = useState(4);
+  const [swingControl, setSwingControl] = useState(18);
+  const [energy, setEnergy] = useState("medium");
   const [lastSamples, setLastSamples] = useState(null);
+  const [regenerationSeed, setRegenerationSeed] = useState(1);
 
   async function generateLoop() {
     setLoading(true);
+    setLastSamples(null);
 
     const res = await fetch("/api/generate", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ prompt })
     });
 
     const data = await res.json();
     setResult(data);
 
-    if (data.bpm) {
-      setBpm(Number(data.bpm));
-    }
+    if (data.bpm) setBpm(Number(data.bpm));
+    if (data.bars) setBarsControl(Number(data.bars));
 
     setLoading(false);
+  }
+
+  function regenerate() {
+    setLastSamples(null);
+    setRegenerationSeed((prev) => prev + 1);
   }
 
   function pick(arr) {
@@ -83,10 +78,7 @@ export default function Home() {
 
   async function loadSample(ctx, url) {
     const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error("Missing file: " + url);
-    }
-
+    if (!res.ok) throw new Error("Missing file: " + url);
     const arr = await res.arrayBuffer();
     return await ctx.decodeAudioData(arr);
   }
@@ -100,9 +92,7 @@ export default function Home() {
       bass808: pick(SAMPLE_LIBRARY.bass808)
     };
 
-    if (!lastSamples && !exportMode) {
-      setLastSamples(selected);
-    }
+    if (!lastSamples && !exportMode) setLastSamples(selected);
 
     const kick = await loadSample(ctx, selected.kick);
     const snare = await loadSample(ctx, selected.snare);
@@ -111,16 +101,19 @@ export default function Home() {
     const bass808 = await loadSample(ctx, selected.bass808);
 
     const bpmVal = Number(result?.bpm || bpm || 140);
-    const bars = Number(result?.bars || 4);
+    const bars = Number(barsControl || result?.bars || 4);
     const stepsPerBar = 16;
     const totalSteps = bars * stepsPerBar;
     const secondsPerBeat = 60 / bpmVal;
     const stepTime = secondsPerBeat / 4;
     const start = exportMode ? 0 : ctx.currentTime + 0.1;
-    const pattern = getPattern();
+    const swingAmount = Number(swingControl) / 100;
 
+    const pattern = getPattern();
     const key = result?.key || "C";
     const base808Rate = get808PlaybackRate(key);
+
+    const energyBoost = energy === "high" ? 1.15 : energy === "low" ? 0.82 : 1;
 
     function play(buffer, time, volume = 1, rate = 1) {
       const src = ctx.createBufferSource();
@@ -128,11 +121,10 @@ export default function Home() {
 
       src.buffer = buffer;
       src.playbackRate.value = rate;
-      gain.gain.value = volume;
+      gain.gain.value = volume * energyBoost;
 
       src.connect(gain);
       gain.connect(ctx.destination);
-
       src.start(time);
     }
 
@@ -140,63 +132,69 @@ export default function Home() {
       let t = start + i * stepTime;
       const pos = i % 16;
       const bar = Math.floor(i / 16);
+      const lastBar = bar === bars - 1;
 
-      // Swing/bounce
-      if (i % 2 === 1) {
-        t += stepTime * 0.18;
+      // Human timing
+      if (i % 2 === 1) t += stepTime * swingAmount;
+      if ([5, 13].includes(pos)) t += stepTime * 0.025;
+
+      // Bar variation
+      let kickPattern = [...pattern.kick];
+      let bassPattern = [...pattern.bass808];
+
+      if (lastBar) {
+        kickPattern = kickPattern.includes(12) ? kickPattern : [...kickPattern, 12];
+        bassPattern = bassPattern.includes(14) ? bassPattern : [...bassPattern, 14];
       }
 
-      // Kick pattern
-      if (pattern.kick.includes(pos)) {
-        const kickVolume = bar === bars - 1 && pos === 14 ? 0.75 : 1;
-        play(kick, t, kickVolume);
+      if (bar === 1 && energy !== "low") {
+        kickPattern = kickPattern.includes(5) ? kickPattern : [...kickPattern, 5];
       }
 
-      // Snare/clap layer
-      if (pattern.snare.includes(pos)) {
-        play(snare, t, 0.9);
+      // Kick
+      if (kickPattern.includes(pos)) {
+        const vol = lastBar && pos === 14 ? 0.78 : 1.0;
+        play(kick, t, vol);
       }
 
-      if (pattern.clap.includes(pos)) {
-        play(clap, t + 0.01, 0.55);
-      }
+      // Snare + clap
+      if (pattern.snare.includes(pos)) play(snare, t, 0.9);
+      if (pattern.clap.includes(pos)) play(clap, t + 0.012, 0.55);
 
-      // Hats
+      // Hats with velocity variation
       if (pattern.hat === "eighths") {
-        if (i % 2 === 0) {
-          play(hat, t, 0.3);
-        }
+        if (i % 2 === 0) play(hat, t, pos % 4 === 0 ? 0.34 : 0.24);
       } else {
         play(hat, t, 0.25);
       }
 
-      // Trap hat rolls
+      // Ghost hats
+      if (energy !== "low" && [2, 6, 10, 14].includes(pos)) {
+        play(hat, t + stepTime * 0.48, 0.12);
+      }
+
+      // Rolls/fills
       if ([3, 7, 11, 15].includes(pos)) {
-        play(hat, t + stepTime / 2, 0.18);
+        play(hat, t + stepTime / 2, 0.17);
       }
 
-      if ([14, 15].includes(pos)) {
-        play(hat, t + stepTime / 3, 0.12);
-        play(hat, t + (stepTime * 2) / 3, 0.1);
+      if (lastBar && [14, 15].includes(pos)) {
+        play(hat, t + stepTime / 3, 0.13);
+        play(hat, t + (stepTime * 2) / 3, 0.11);
       }
 
-      // 808 in key
-      if (pattern.bass808.includes(pos)) {
+      // 808 in key with movement
+      if (bassPattern.includes(pos)) {
         let rate = base808Rate;
-
-        // Small pitch movement so it feels like a bassline
         if (pos === 6) rate = base808Rate * Math.pow(2, 3 / 12);
         if (pos === 10) rate = base808Rate * Math.pow(2, 5 / 12);
+        if (pos === 14) rate = base808Rate * Math.pow(2, 7 / 12);
 
         play(bass808, t, 0.9, rate);
       }
     }
 
-    return {
-      bpmVal,
-      bars,
-      selected
-    };
+    return { bpmVal, bars, selected };
   }
 
   async function playAILoop() {
@@ -207,7 +205,9 @@ export default function Home() {
       setResult((prev) => ({
         ...(prev || {}),
         selectedSamples: built.selected,
-        tuned808Key: prev?.key || "C"
+        tuned808Key: prev?.key || "C",
+        controls: { bars: barsControl, swing: swingControl, energy },
+        regenerationSeed
       }));
     } catch (err) {
       alert("Error: " + err.message);
@@ -223,72 +223,42 @@ export default function Home() {
     let offset = 0;
 
     function writeString(str) {
-      for (let i = 0; i < str.length; i++) {
-        view.setUint8(offset++, str.charCodeAt(i));
-      }
+      for (let i = 0; i < str.length; i++) view.setUint8(offset++, str.charCodeAt(i));
     }
 
     writeString("RIFF");
-    view.setUint32(offset, length - 8, true);
-    offset += 4;
-
+    view.setUint32(offset, length - 8, true); offset += 4;
     writeString("WAVE");
     writeString("fmt ");
-    view.setUint32(offset, 16, true);
-    offset += 4;
-
-    view.setUint16(offset, 1, true);
-    offset += 2;
-
-    view.setUint16(offset, numChannels, true);
-    offset += 2;
-
-    view.setUint32(offset, sampleRate, true);
-    offset += 4;
-
-    view.setUint32(offset, sampleRate * numChannels * 2, true);
-    offset += 4;
-
-    view.setUint16(offset, numChannels * 2, true);
-    offset += 2;
-
-    view.setUint16(offset, 16, true);
-    offset += 2;
-
+    view.setUint32(offset, 16, true); offset += 4;
+    view.setUint16(offset, 1, true); offset += 2;
+    view.setUint16(offset, numChannels, true); offset += 2;
+    view.setUint32(offset, sampleRate, true); offset += 4;
+    view.setUint32(offset, sampleRate * numChannels * 2, true); offset += 4;
+    view.setUint16(offset, numChannels * 2, true); offset += 2;
+    view.setUint16(offset, 16, true); offset += 2;
     writeString("data");
-    view.setUint32(offset, length - offset - 4, true);
-    offset += 4;
+    view.setUint32(offset, length - offset - 4, true); offset += 4;
 
     for (let i = 0; i < buffer.length; i++) {
       for (let ch = 0; ch < numChannels; ch++) {
         let sample = buffer.getChannelData(ch)[i];
         sample = Math.max(-1, Math.min(1, sample));
-        view.setInt16(
-          offset,
-          sample < 0 ? sample * 0x8000 : sample * 0x7fff,
-          true
-        );
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
         offset += 2;
       }
     }
 
-    return new Blob([arrayBuffer], {
-      type: "audio/wav"
-    });
+    return new Blob([arrayBuffer], { type: "audio/wav" });
   }
 
   async function downloadWav() {
     try {
       const bpmVal = Number(result?.bpm || bpm || 140);
-      const bars = Number(result?.bars || 4);
+      const bars = Number(barsControl || result?.bars || 4);
       const duration = bars * 4 * (60 / bpmVal) + 1;
       const sampleRate = 44100;
-
-      const offline = new OfflineAudioContext(
-        2,
-        sampleRate * duration,
-        sampleRate
-      );
+      const offline = new OfflineAudioContext(2, sampleRate * duration, sampleRate);
 
       await buildLoop(offline, true);
 
@@ -300,7 +270,6 @@ export default function Home() {
       a.href = url;
       a.download = `mpc-loop-${result?.key || "C"}-${bpmVal}bpm-${bars}bars.wav`;
       a.click();
-
       URL.revokeObjectURL(url);
     } catch (err) {
       alert("WAV export error: " + err.message);
@@ -308,15 +277,7 @@ export default function Home() {
   }
 
   return (
-    <div
-      style={{
-        padding: 24,
-        fontFamily: "Arial",
-        background: "#0d0d0f",
-        color: "white",
-        minHeight: "100vh"
-      }}
-    >
+    <div style={{ padding: 24, fontFamily: "Arial", background: "#0d0d0f", color: "white", minHeight: "100vh" }}>
       <h1>MPC LoopBuilder AI</h1>
       <p>AI-powered MPC loop generator using your real drum samples.</p>
 
@@ -324,20 +285,17 @@ export default function Home() {
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         placeholder="Example: hard trap drums 4 bars 83 bpm F minor with 808 bounce"
-        style={{
-          width: "100%",
-          minHeight: 100,
-          padding: 12,
-          borderRadius: 10,
-          fontSize: 16
-        }}
+        style={{ width: "100%", minHeight: 100, padding: 12, borderRadius: 10, fontSize: 16 }}
       />
 
-      <br />
-      <br />
+      <br /><br />
 
       <button onClick={generateLoop} style={{ padding: 12, marginRight: 10 }}>
         {loading ? "Generating..." : "Generate Loop"}
+      </button>
+
+      <button onClick={regenerate} style={{ padding: 12, marginRight: 10 }}>
+        Regenerate
       </button>
 
       <button onClick={playAILoop} style={{ padding: 12, marginRight: 10 }}>
@@ -349,31 +307,26 @@ export default function Home() {
       </button>
 
       <h3>BPM: {bpm}</h3>
+      <input type="range" min="60" max="180" value={bpm} onChange={(e) => setBpm(Number(e.target.value))} style={{ width: "100%" }} />
 
-      <input
-        type="range"
-        min="60"
-        max="180"
-        value={bpm}
-        onChange={(e) => setBpm(Number(e.target.value))}
-        style={{ width: "100%" }}
-      />
+      <h3>Bars: {barsControl}</h3>
+      <button onClick={() => setBarsControl(4)} style={{ padding: 10, marginRight: 8 }}>4 Bars</button>
+      <button onClick={() => setBarsControl(8)} style={{ padding: 10 }}>8 Bars</button>
+
+      <h3>Swing: {swingControl}%</h3>
+      <input type="range" min="0" max="35" value={swingControl} onChange={(e) => setSwingControl(Number(e.target.value))} style={{ width: "100%" }} />
+
+      <h3>Energy: {energy}</h3>
+      <button onClick={() => setEnergy("low")} style={{ padding: 10, marginRight: 8 }}>Low</button>
+      <button onClick={() => setEnergy("medium")} style={{ padding: 10, marginRight: 8 }}>Medium</button>
+      <button onClick={() => setEnergy("high")} style={{ padding: 10 }}>High</button>
 
       {result && (
-        <div
-          style={{
-            marginTop: 20,
-            background: "#18181b",
-            padding: 16,
-            borderRadius: 12
-          }}
-        >
+        <div style={{ marginTop: 20, background: "#18181b", padding: 16, borderRadius: 12 }}>
           <h2>Loop Plan</h2>
-          <pre style={{ whiteSpace: "pre-wrap" }}>
-            {JSON.stringify(result, null, 2)}
-          </pre>
+          <pre style={{ whiteSpace: "pre-wrap" }}>{JSON.stringify(result, null, 2)}</pre>
         </div>
       )}
     </div>
   );
-          }
+}
