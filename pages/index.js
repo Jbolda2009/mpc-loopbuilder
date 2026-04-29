@@ -2,39 +2,53 @@ import { useState } from "react";
 
 export default function Home() {
   const [bpm, setBpm] = useState(90);
+  const [prompt, setPrompt] = useState("");
+  const [result, setResult] = useState(null);
 
-  function playLoop() {
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  async function generateLoop() {
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prompt }),
+    });
 
-    const duration = 4 * (60 / bpm); // 4 beats
-    const sampleRate = audioCtx.sampleRate;
-    const frameCount = sampleRate * duration;
+    const data = await res.json();
 
-    const buffer = audioCtx.createBuffer(1, frameCount, sampleRate);
-    const data = buffer.getChannelData(0);
+    setResult(data);
 
-    for (let i = 0; i < frameCount; i++) {
-      const t = i / sampleRate;
-
-      // simple sine wave tone
-      data[i] = Math.sin(2 * Math.PI * 220 * t) * 0.2;
-
-      // add kick on beat
-      if (Math.floor(t * bpm / 60) % 4 === 0) {
-        data[i] += Math.sin(2 * Math.PI * 60 * t) * 0.5;
-      }
-    }
-
-    const source = audioCtx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(audioCtx.destination);
-    source.start();
+    if (data.bpm) setBpm(data.bpm);
   }
 
   return (
     <div style={{ padding: 20 }}>
-      <h1>MPC LoopBuilder</h1>
+      <h1>MPC LoopBuilder AI</h1>
+
+      <input
+        type="text"
+        placeholder="Type what you want (e.g. dark trap guitar 140 bpm)"
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        style={{ width: "100%", padding: 10 }}
+      />
+
+      <br /><br />
+
+      <button onClick={generateLoop}>
+        Generate Loop
+      </button>
+
+      <br /><br />
+
       <p>BPM: {bpm}</p>
+
+      {result && (
+        <pre>{JSON.stringify(result, null, 2)}</pre>
+      )}
+    </div>
+  );
+}      <p>BPM: {bpm}</p>
 
       <input
         type="range"
