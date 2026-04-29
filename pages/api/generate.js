@@ -2,7 +2,7 @@ export default async function handler(req, res) {
   try {
     const { prompt } = req.body;
 
-    const response = await fetch("https://api.openai.com/v1/responses", {
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
@@ -10,29 +10,33 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        input: `Return ONLY JSON like:
+        messages: [
+          {
+            role: "system",
+            content: "You are a music loop generator. Always return ONLY valid JSON."
+          },
+          {
+            role: "user",
+            content: `Create loop settings from this request: ${prompt}
+
+Return JSON exactly like:
 {
-  "bpm": number,
+  "bpm": 140,
   "key": "F",
   "scale": "minor",
   "style": "trap",
   "instrument": "guitar"
-}
-
-User request: ${prompt}`
+}`
+          }
+        ]
       })
     });
 
     const data = await response.json();
 
-    // 🔥 SAFE parsing (handles different formats)
-    let text =
-      data.output?.[0]?.content?.[0]?.text ||
-      data.choices?.[0]?.message?.content ||
-      "";
+    const text = data.choices?.[0]?.message?.content || "";
 
     let parsed;
-
     try {
       parsed = JSON.parse(text);
     } catch {
