@@ -10,16 +10,20 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
+        temperature: 0.7,
         messages: [
           {
             role: "system",
-            content: "You are a music loop generator. Always return ONLY valid JSON."
+            content:
+              "You are a music loop generator. Always respond ONLY with valid JSON."
           },
           {
             role: "user",
-            content: `Create loop settings from this request: ${prompt}
+            content: `Convert this into loop settings:
 
-Return JSON exactly like:
+${prompt}
+
+Return ONLY JSON in this format:
 {
   "bpm": 140,
   "key": "F",
@@ -34,20 +38,31 @@ Return JSON exactly like:
 
     const data = await response.json();
 
-    const text = data.choices?.[0]?.message?.content || "";
+    // 🔥 Log full response for debugging
+    console.log("OPENAI RESPONSE:", JSON.stringify(data, null, 2));
+
+    const text = data.choices?.[0]?.message?.content;
+
+    if (!text) {
+      return res.status(500).json({
+        error: "No response from AI",
+        full: data
+      });
+    }
 
     let parsed;
+
     try {
       parsed = JSON.parse(text);
     } catch {
       parsed = { raw: text };
     }
 
-    res.status(200).json(parsed);
+    return res.status(200).json(parsed);
 
   } catch (err) {
-    res.status(500).json({
-      error: "AI request failed",
+    return res.status(500).json({
+      error: "Server crash",
       details: err.message
     });
   }
